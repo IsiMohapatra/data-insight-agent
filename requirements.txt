@@ -1,0 +1,8 @@
+importlib_metadata @ file:///home/conda/feedstock_root/build_artifacts/importlib-metadata_1719361860083/work
+importlib_resources @ file:///home/conda/feedstock_root/build_artifacts/importlib_resources_1711040877059/work
+python-dotenv==1.1.1
+groq==0.30.0
+matplotlib==3.9.1
+pandas @ file:///D:/bld/pandas_1726878552024/work
+numpy @ file:///D:/bld/numpy_1707225519803/work/dist/numpy-1.26.4-cp312-cp312-win_amd64.whl#sha256=ffaa9485afb654c70a658c3ad4b7d2e60c60d8450d3779408d3a496564dc1d43
+mdfreader @ file:///D:/bld/mdfreader_1695933777268/work
