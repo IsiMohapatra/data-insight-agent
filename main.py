@@ -1,6 +1,7 @@
 import os
 import json
 import importlib
+import traceback
 from dotenv import load_dotenv
 from groq import Groq
 from rag.context_builder import build_context_and_store
@@ -23,109 +24,73 @@ def load_function_rules(rules_path="rag/manual.json"):
     with open(rules_path, "r") as f:
         return json.load(f)
 
-import traceback
+
 
 def ask_llm_with_tools(user_prompt: str, rag_context: dict, rules_path="rag/manual.json"):
-    # 🆕 LLM call to split the user prompt into sub-queries
-    def split_into_queries(prompt):
-        splitter_prompt = (
-            "Split the following user prompt into individual task-based queries. "
-            "Return a JSON list of each query. No explanation, no markdown.\n\n"
-            f"Prompt: {prompt}\n\nOutput:"
-        )
-        try:
-            response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=[
-                    {"role": "system", "content": "You are a task splitter. You only return a JSON list of sub-queries."},
-                    {"role": "user", "content": splitter_prompt}
-                ]
-            )
-            queries = json.loads(response.choices[0].message.content.strip())
-            if isinstance(queries, list):
-                return queries
-            else:
-                return [prompt]  # fallback to whole prompt as one
-        except Exception:
-            traceback.print_exc()
-            return [prompt]
-
-    # 🆕 Split the user prompt first
-    sub_queries = split_into_queries(user_prompt)
-
-    print("\n📌 Split Queries:")
-    for i, q in enumerate(sub_queries, 1):
-        print(f"  {i}. {q}")
+    system_prompt = (
+        "You are a helpful assistant for a CAN signal tool. "
+        "Analyze the user prompt and based on the context provided, "
+        "return the appropriate function to call. Strictly return only a JSON object like this — "
+        "no explanation, no markdown, no text — just the JSON:\n\n"
+        "{\n  \"function\": \"function_name\",\n  \"inputs\": { \"arg1\": value, ... }\n}"
+    )
 
     function_rules = load_function_rules(rules_path)
-    results = []
 
-    for query in sub_queries:
+    try:
+        print(f"Your prompt: {user_prompt}")
+        print("📡 Asking Groq to analyze prompt...")
+
+        response = groq_client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"User prompt: {user_prompt}\n\nAvailable functions: {json.dumps(function_rules)}"}
+            ]
+        )
+        
+        model_reply = response.choices[0].message.content.strip()
+        print("🧠 Raw LLM Response:", model_reply)
+
         try:
-            print(f"\n📡 Asking Groq to analyze sub-query: {query}")
-
-            response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=[
-                    {"role": "system", "content": (
-                        "You are a helpful assistant for a CAN signal tool. "
-                        "Analyze the user prompt and based on the context provided, "
-                        "return the appropriate function to call. Strictly return only a JSON object like this — "
-                        "no explanation, no markdown, no text — just the JSON:\n\n"
-                        "{\n  \"function\": \"function_name\",\n  \"inputs\": { \"arg1\": value, ... }\n}"
-                    )},
-                    {"role": "user", "content": f"User prompt: {query}\n\nAvailable functions: {json.dumps(function_rules)}"}
-                ]
-            )
-
-            model_reply = response.choices[0].message.content.strip()
-            print("🧠 Raw LLM Response:", model_reply)
-
-            try:
-                parsed = json.loads(model_reply)
-                function_name = parsed["function"]
-                inputs = parsed["inputs"]
-            except json.JSONDecodeError:
-                print("💬 Fallback to friendly chat mode.")
-                results.append({
-                    "function": None,
-                    "inputs": {},
-                    "output": model_reply or "👋 Hello! How can I assist you today?"
-                })
-                continue
-
-        except Exception as e:
-            traceback.print_exc()
-            results.append({
+            parsed = json.loads(model_reply)
+            function_name = parsed["function"]
+            inputs = parsed["inputs"]
+        except json.JSONDecodeError:
+            # Fallback for small talk like "hello", "thanks", etc.
+            print("💬 Fallback to friendly chat mode.")
+            return {
                 "function": None,
                 "inputs": {},
-                "output": f"❌ Groq call failed: {str(e)}"
-            })
-            continue
+                "output": model_reply or "👋 Hello! How can I assist you today?"
+            }
 
-        # Call the appropriate function (no changes here)
-        try:
-            module = importlib.import_module(f"tools.{function_name}")
-            func = getattr(module, function_name)
-            result = func(rag_context=rag_context, **inputs)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {
+            "function": None,
+            "inputs": {},
+            "output": f"❌ Groq call failed: {str(e)}"
+        }
 
-            results.append({
-                "function": function_name,
-                "inputs": inputs,
-                "output": result
-            })
+    # Attempt to dynamically call the tool function
+    try:
+        module = importlib.import_module(f"tools.{function_name}")
+        func = getattr(module, function_name)
+        result = func(rag_context=rag_context, **inputs)
 
-        except Exception as e:
-            traceback.print_exc()
-            print(f"❌ Failed to call function `{function_name}`:", str(e))
-            results.append({
-                "function": function_name,
-                "inputs": inputs,
-                "output": f"❌ Error during function execution: {str(e)}"
-            })
+        return result
 
-    return results
-
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"❌ Failed to call function {function_name}:", str(e))
+        return {
+            "function": function_name,
+            "inputs": inputs,
+            "output": f"❌ Error during function execution: {str(e)}"
+        }
 
 if __name__ == "__main__":
     import time
