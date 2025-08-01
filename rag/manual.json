@@ -1,0 +1,30 @@
+{
+  "functions": [
+    {
+      "name": "lookup_signal",
+      "description": "Find the INCA signal from an English signal name. Returns signal data (timestamps and values).",
+      "inputs": {
+        "english_name": "str"
+      },
+      "keywords": ["lookup", "get signal", "find", "inca name", "fetch", "retrieve", "read"]
+    },
+    {
+      "name": "analyze_signal_extremes",
+      "description": "Find the maximum or minimum value in a signal. Looks up signal internally using English name.",
+      "inputs": {
+        "english_name": "str",
+        "mode": "str (either 'max' or 'min')"
+      },
+      "keywords": ["max", "maximum", "min", "minimum", "highest", "lowest", "extreme"]
+    },
+    {
+      "name": "plot_signal",
+      "description": "Plot one or two signals. Each signal is looked up using English name.",
+      "inputs": {
+        "signal1_name": "str",
+        "signal2_name": "optional str (if comparing)"
+      },
+      "keywords": ["plot", "graph", "visualize", "chart", "compare", "vs", "against"]
+    }
+  ]
+}
