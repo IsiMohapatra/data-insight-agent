@@ -15,7 +15,6 @@ if not groq_api_key:
 
 groq_client = Groq(api_key=groq_api_key)
 
-
 def load_function_rules(rules_path="rag/manual.json"):
     if not os.path.exists(rules_path):
         raise FileNotFoundError(f"⚠️ manual.json not found at: {rules_path}")
@@ -130,8 +129,8 @@ def ask_llm_with_tools(user_prompt: str, rag_context: dict, rules_path="rag/manu
 if __name__ == "__main__":
     import time
 
-    excel_path = r"C:\Users\AFO3KOR\Desktop\english-inca mapping.xlsx"
-    mf4_path = r"C:\Users\AFO3KOR\Desktop\Fleet Analysis\measurements\71878401511\20241017_1\20241017005907_71878401511_CANLogger_CC21_E20_Final_run_V3.mf4"
+    excel_path = "english-inca mapping.xlsx"
+    mf4_path = "20241017005907_71878401511_CANLogger_CC21_E20_Final_run_V3.mf4"
 
     print("⚙️  Initializing context from Excel and MF4 file...")
     rag_context = build_context_and_store(excel_path, mf4_path)
