@@ -5,6 +5,7 @@ import traceback
 from dotenv import load_dotenv
 from groq import Groq
 from rag.context_builder import build_context_and_store
+from prompts.splitter_prompt import get_split_prompt
 
 # 1. Load Environment
 load_dotenv()
@@ -24,73 +25,118 @@ def load_function_rules(rules_path="rag/manual.json"):
     with open(rules_path, "r") as f:
         return json.load(f)
 
-
-
-def ask_llm_with_tools(user_prompt: str, rag_context: dict, rules_path="rag/manual.json"):
-    system_prompt = (
-        "You are a helpful assistant for a CAN signal tool. "
-        "Analyze the user prompt and based on the context provided, "
-        "return the appropriate function to call. Strictly return only a JSON object like this — "
-        "no explanation, no markdown, no text — just the JSON:\n\n"
-        "{\n  \"function\": \"function_name\",\n  \"inputs\": { \"arg1\": value, ... }\n}"
-    )
-
-    function_rules = load_function_rules(rules_path)
+def split_into_queries(user_prompt: str, groq_client) -> list:
+    prompt_text = get_split_prompt(user_prompt)
 
     try:
-        print(f"Your prompt: {user_prompt}")
-        print("📡 Asking Groq to analyze prompt...")
-
         response = groq_client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama3-8b-8192",  # Or your fine-tuned model
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"User prompt: {user_prompt}\n\nAvailable functions: {json.dumps(function_rules)}"}
-            ]
+                {"role": "system", "content": "You are a precise query splitter assistant."},
+                {"role": "user", "content": prompt_text}
+            ],
+            temperature=0.0
         )
-        
-        model_reply = response.choices[0].message.content.strip()
-        print("🧠 Raw LLM Response:", model_reply)
+        raw_output = response.choices[0].message.content.strip()
 
         try:
-            parsed = json.loads(model_reply)
-            function_name = parsed["function"]
-            inputs = parsed["inputs"]
+            queries = json.loads(raw_output)
+            if isinstance(queries, list):
+                return queries
+            else:
+                print("❌ Split output is not a list, fallback to original prompt.")
+                return [user_prompt]
         except json.JSONDecodeError:
-            # Fallback for small talk like "hello", "thanks", etc.
-            print("💬 Fallback to friendly chat mode.")
-            return {
+            print("❌ Failed to parse JSON from splitter output. Raw output:")
+            print(raw_output)
+            return [user_prompt]
+
+    except Exception:
+        traceback.print_exc()
+        return [user_prompt]
+
+def ask_llm_with_tools(user_prompt: str, rag_context: dict, groq_client, rules_path="rag/manual.json"):
+    memory = {"last_signal": None}
+
+    # Step A: Split user prompt into sub-queries using your new splitter
+    sub_queries = split_into_queries(user_prompt, groq_client)
+
+    print("\n📌 Split Queries:")
+    for i, q in enumerate(sub_queries, 1):
+        print(f"  {i}. {q}")
+
+    function_rules = load_function_rules(rules_path)
+    results = []
+
+    # Step B: For each sub-query, call Groq to determine function & inputs, then execute
+    for query in sub_queries:
+        try:
+            print(f"\n📡 Analyzing sub-query: {query}")
+            response = groq_client.chat.completions.create(
+                model="llama3-8b-8192",  # or your function mapping model
+                messages=[
+                    {"role": "system", "content": (
+                        "You are a helpful assistant for a CAN signal tool. "
+                        "Analyze the user prompt and based on the context provided, "
+                        "return the appropriate function to call. Strictly return only a JSON object like this — "
+                        "no explanation, no markdown, no text — just the JSON:\n\n"
+                        "{\n  \"function\": \"function_name\",\n  \"inputs\": { \"arg1\": value, ... }\n}"
+                    )},
+                    {"role": "user", "content": f"User prompt: {query}\n\nAvailable functions: {json.dumps(function_rules)}"}
+                ],
+                temperature=0.0
+            )
+
+            model_reply = response.choices[0].message.content.strip()
+            print("🧠 Raw LLM Response:", model_reply)
+
+            try:
+                parsed = json.loads(model_reply)
+                function_name = parsed["function"]
+                inputs = parsed["inputs"]
+
+            except json.JSONDecodeError:
+                print("💬 Fallback to friendly chat mode.")
+                results.append({
+                    "function": None,
+                    "inputs": {},
+                    "output": model_reply or "👋 Hello! How can I assist you today?"
+                })
+                continue
+
+        except Exception as e:
+            traceback.print_exc()
+            results.append({
                 "function": None,
                 "inputs": {},
-                "output": model_reply or "👋 Hello! How can I assist you today?"
-            }
+                "output": f"❌ Groq call failed: {str(e)}"
+            })
+            continue
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {
-            "function": None,
-            "inputs": {},
-            "output": f"❌ Groq call failed: {str(e)}"
-        }
+        # Step C: Call the determined function dynamically
+        try:
+            module = importlib.import_module(f"tools.{function_name}")
+            func = getattr(module, function_name)
+            result = func(rag_context=rag_context, **inputs)
 
-    # Attempt to dynamically call the tool function
-    try:
-        module = importlib.import_module(f"tools.{function_name}")
-        func = getattr(module, function_name)
-        result = func(rag_context=rag_context, **inputs)
+            results.append({
+                "function": function_name,
+                "inputs": inputs,
+                "output": result
+            })
 
-        return result
+        except Exception as e:
+            traceback.print_exc()
+            print(f"❌ Failed to call function `{function_name}`:", str(e))
+            results.append({
+                "function": function_name,
+                "inputs": inputs,
+                "output": f"❌ Error during function execution: {str(e)}"
+            })
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"❌ Failed to call function {function_name}:", str(e))
-        return {
-            "function": function_name,
-            "inputs": inputs,
-            "output": f"❌ Error during function execution: {str(e)}"
-        }
+    return results
+
+
 
 if __name__ == "__main__":
     import time
@@ -111,7 +157,7 @@ if __name__ == "__main__":
                 print("👋 Exiting. Thank you!")
                 break
 
-            result = ask_llm_with_tools(user_input, rag_context)
+            result = ask_llm_with_tools(user_input, rag_context,groq_client)
             print(result)
 
         except KeyboardInterrupt:
